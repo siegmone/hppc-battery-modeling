@@ -129,7 +129,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=t_ds, y=t_ds, mode="lines", name="Current Filtered"))
+fig.add_trace(go.Scatter(x=t_ds, y=v_ds, mode="lines", name="Current Filtered"))
 vlines_color = "yellow"
 vlines_style = "dot"
 for vline in t_f[edges]:
