@@ -85,9 +85,9 @@ c_f = np.sum(
 
 edges = analysis.detect_edges(c_f)
 
-t_ds = t_f[::50]
-c_ds = c_f[::50]
-v_ds = v_f[::50]
+t_ds = t_f[::10]
+c_ds = c_f[::10]
+v_ds = v_f[::10]
 
 
 
@@ -129,7 +129,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=t_ds, y=v_ds, mode="lines", name="Current Filtered"))
+fig.add_trace(go.Scatter(x=t_ds, y=v_ds, mode="lines", name="Tension Filtered"))
 vlines_color = "yellow"
 vlines_style = "dot"
 for vline in t_f[edges]:
