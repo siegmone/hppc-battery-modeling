@@ -87,6 +87,17 @@ edges = analysis.detect_edges(c_f)
 
 t_ds = t_f[::50]
 c_ds = c_f[::50]
+v_ds = v_f[::50]
+
+
+
+st.write("""
+Detecting the edges in the current draw enables us to find when
+the cell is being discharged and construct the OCV vs SoC curve
+calculating the amount of charge drawn by the cell during discharge
+and relating it to the nominal cell capacity.
+""")
+
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=t_ds, y=c_ds, mode="lines", name="Current Filtered"))
@@ -115,15 +126,37 @@ fig.update_layout(
     legend=dict(font=dict(size=14)),
     height=600,
 )
-
-
-st.write("""
-Detecting the edges in the current draw enables us to find when
-the cell is being discharged and construct the OCV vs SoC curve
-calculating the amount of charge drawn by the cell during discharge
-and relating it to the nominal cell capacity.
-""")
 st.plotly_chart(fig, use_container_width=True)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=t_ds, y=t_ds, mode="lines", name="Current Filtered"))
+vlines_color = "yellow"
+vlines_style = "dot"
+for vline in t_f[edges]:
+    fig.add_vline(
+        x=vline,
+        line_width=1,
+        line_dash=vlines_style,
+        line_color=vlines_color,
+    )
+fig.add_trace(
+    go.Scatter(
+        x=[None],
+        y=[None],
+        mode="lines",
+        line=dict(color=vlines_color, dash=vlines_style),
+        name="Detected Edges",
+    )
+)
+fig.update_layout(
+    title=dict(text="Edges in voltages", font=dict(size=18)),
+    xaxis=dict(title="Time (s)", title_font=dict(size=18), tickfont=dict(size=14)),
+    yaxis=dict(title="Voltage (V)", title_font=dict(size=18), tickfont=dict(size=14)),
+    legend=dict(font=dict(size=14)),
+    height=600,
+)
+st.plotly_chart(fig, use_container_width=True)
+
 
 
 # analysis
