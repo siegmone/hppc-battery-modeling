@@ -34,13 +34,13 @@ crate_match = re.search(r"(\d+)C", selected_file)
 CRATE = int(crate_match.group(1)) if crate_match else 1
 
 data_load_state = st.text("Loading data...")
-data = load_data(selected_file)
+df = load_data(selected_file)
 data_load_state.text("")
-st.dataframe(data)
+st.dataframe(df)
 
-t = np.array(data.get("time", 0))
-v = np.array(data.get("voltage", 0))
-c = np.array(data.get("current", 0))
+t = np.array(df.get("time", 0))
+v = np.array(df.get("voltage", 0))
+c = np.array(df.get("current", 0))
 
 
 st.subheader("Raw Data")
@@ -160,7 +160,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 
 # analysis
-ocv_values, soc = analysis.analyze_dataset(data)
+ocv_values, soc = analysis.analyze_dataset(df)
 data_ocv = pd.DataFrame(
     {
         "temp": TEMP,
@@ -191,7 +191,7 @@ fig, ax = analysis.plot_soc_ocv(
     "OCV (V)",
     *popt,
 )
-st.subheader("Best Fit")
+st.subheader("OCV vs SoC curve parameter estimation")
 st.write("""
 Perform the fit with a **log-linear exponential (LEE)** function:
 """)
@@ -201,6 +201,28 @@ a + b \cdot \log(\text{SoC} + c) + d \cdot \text{SoC} + \exp\left[e (\text{SoC} 
 st.pyplot(fig)
 st.write("Estimated Parameters:")
 st.markdown(parameters.to_html(index=False), unsafe_allow_html=True)
+
+st.subheader("Battery model parameter estimation")
+edges_sensible = analysis.detect_edges(c_f, alpha_slow=0.6, alpha_fast=0.30, delta_threshold=0.1)
+start = edges_sensible[0]
+end = edges_sensible[1]
+t_s = t_f[start:end] - t_f[start]
+v_s = v_f[start:end]
+c_s = c_f[start:end]
+ocv_start_values = np.full_like(t_s, 4.2)
+battery_inputs = np.vstack([t_s, -c_s, ocv_start_values])
+battery_params = analysis.battery_parameter_estimation(df)
+r0, r1, r2, t1, t2 = battery_params
+# compute capacities
+c1 = t1 / r1 if r1 > 0 else np.nan
+c2 = t2 / r2 if r2 > 0 else np.nan
+
+model_bat_voltage = analysis.battery_model(battery_inputs, *battery_params)
+fig, ax = analysis.plot_setup("", "", "")
+ax.scatter(t_s, v_s, label="Data", color="y")
+ax.plot(t_s, model_bat_voltage, label="Fitted model", c="r", ls="--")
+ax.legend()
+st.pyplot(fig)
 
 filename = "ocv_lut.h"
 st.subheader("Example output file: " + filename)

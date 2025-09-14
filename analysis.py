@@ -46,8 +46,8 @@ def plot_soc_ocv(
 
     ax.set_xlim(0, 100)
 
-    ax.scatter(soc, ocv, color="r", s=50, marker="X", label="SoC vs OCV data")
-    ax.plot(soc_fit, ocv_fit, color="y", linestyle="-.", label="Fitted curve")
+    ax.scatter(soc, ocv, color="y", s=50, marker="X", label="SoC vs OCV data")
+    ax.plot(soc_fit, ocv_fit, color="b", linestyle="-.", label="Fitted curve")
     ax.legend()
 
     return fig, ax
@@ -144,11 +144,7 @@ def parameter_estimation(t: np.ndarray, v: np.ndarray, c: np.ndarray, ocv_value:
     r0, r1, r2, t1, t2 = popt
     _ = np.sqrt(np.diag(pcov))
 
-    # compute capacities
-    c1 = t1 / r1 if r1 > 0 else np.nan
-    c2 = t2 / r2 if r2 > 0 else np.nan
-
-    return [r0, r1, r2, c1, c2]
+    return popt
 
 
 def battery_parameter_estimation(df: pd.DataFrame) -> List[float]:
