@@ -4,9 +4,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, Bounds
 import glob
 import re
+
+# TODO(siegmone): generate model.h file with battery parameter estimation and lut
 
 SOC_MIN = 0.01
 SOC_MAX = 1.00
@@ -31,7 +33,9 @@ def plot_setup(title: str, xlabel: str, ylabel: str) -> Tuple[Figure, Axes]:
     return fig, ax
 
 
-def plot_soc_ocv(soc: np.ndarray, ocv: np.ndarray, title: str, xlabel: str, ylabel: str, *params) -> Tuple[Figure, Axes]:
+def plot_soc_ocv(
+    soc: np.ndarray, ocv: np.ndarray, title: str, xlabel: str, ylabel: str, *params
+) -> Tuple[Figure, Axes]:
     fig, ax = plot_setup(title, xlabel, ylabel)
 
     soc_fit = np.linspace(0, SOC_MAX, FIT_POINTS)
@@ -42,7 +46,7 @@ def plot_soc_ocv(soc: np.ndarray, ocv: np.ndarray, title: str, xlabel: str, ylab
 
     ax.set_xlim(0, 100)
 
-    ax.scatter(soc, ocv, color="w", s=50, marker="X", label="SoC vs OCV data")
+    ax.scatter(soc, ocv, color="r", s=50, marker="X", label="SoC vs OCV data")
     ax.plot(soc_fit, ocv_fit, color="y", linestyle="-.", label="Fitted curve")
     ax.legend()
 
@@ -57,11 +61,8 @@ def detect_edges(
     array: np.ndarray | Sequence[float],
     alpha_fast: float = 0.4,
     alpha_slow: float = 0.15,
+    delta_threshold: float = 0.5,
 ) -> List[int]:
-    alpha_fast = 0.4
-    alpha_slow = 0.15
-    delta_threshold = 0.5
-
     r_fast = array[0]
     r_slow = array[0]
     delta = r_fast - r_slow
@@ -93,16 +94,112 @@ def ocv_model(inputs: Sequence[np.ndarray | float], *params: float) -> np.ndarra
     return base
 
 
-def analyze_dataset(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-    # unpack data into np.array
-    t = np.array(df.get("time", 0))
-    v = np.array(df.get("voltage", 0))
-    c = np.array(df.get("current", 0))
+def battery_model(inputs: Sequence[np.ndarray | float], *params: float) -> np.ndarray:
+    time, current, ocv = inputs
+    r0, r1, r2, t1, t2 = params
+    return (
+        ocv
+        - current * r0
+        - current * r1 * (1 - np.exp(-time / t1))
+        - current * r2 * (1 - np.exp(-time / t2))
+    )
+
+
+def parameter_estimation(t: np.ndarray, v: np.ndarray, c: np.ndarray, ocv_value: float, start: int, end: int):
+    t_s = t[start:end] - t[start]
+    v_s = v[start:end]
+    c_s = c[start:end]
+
+    ocv_values = np.full_like(t_s, ocv_value)
+    xdata = np.vstack([t_s, -c_s, ocv_values])
+    ydata = v_s
+
+    lower = [
+        0.0,
+        0.0,
+        0.0,
+        1e-6,
+        1e-6
+    ]
+    upper = [
+        0.5,
+        0.5,
+        0.5,
+        1e5,
+        1e6
+    ]
+    bounds = Bounds(lower, upper)
+
+    p0 = [0.01, 0.01, 0.01, 1.0, 100.0]
+
+    popt, pcov = curve_fit(
+        battery_model,
+        xdata=xdata,
+        ydata=ydata,
+        p0=p0,
+        bounds=bounds,
+        max_nfev=20000,
+    )
+
+    r0, r1, r2, t1, t2 = popt
+    _ = np.sqrt(np.diag(pcov))
+
+    # compute capacities
+    c1 = t1 / r1 if r1 > 0 else np.nan
+    c2 = t2 / r2 if r2 > 0 else np.nan
+
+    return [r0, r1, r2, c1, c2]
+
+
+def battery_parameter_estimation(df: pd.DataFrame) -> List[float]:
+    t, v, c = unpack_dataframe(df)
 
     t_unique = np.unique(t)
     sampling_freq = np.mean(1 / (t_unique[1:] - t_unique[:-1]))
+    ocv_avg_time = 10
+    chunk_size = int(ocv_avg_time * sampling_freq)
+    skip_factor = 6
 
-    edges = detect_edges(c)
+    # filter voltages and currents to eliminate noise
+    samples_num = 5
+    t_f = t
+    v_f = np.sum(
+        np.lib.stride_tricks.sliding_window_view(v, 2 * samples_num + 1), axis=1
+    ) / (2 * samples_num + 1)
+    c_f = np.sum(
+        np.lib.stride_tricks.sliding_window_view(c, 2 * samples_num + 1), axis=1
+    ) / (2 * samples_num + 1)
+
+    edges = detect_edges(c_f, alpha_slow=0.6, alpha_fast=0.30, delta_threshold=0.1)
+
+    params_all = []
+    for i in range(len(edges) // skip_factor):
+        for j in range(2):
+            start = edges[i * skip_factor + 2 * j]
+            end = edges[i * skip_factor + 2 * j + 1]
+            ocv_value = np.mean(v_f[start - chunk_size : start])
+            parameters = parameter_estimation(t_f, v_f, c_f, ocv_value, start, end)
+            params_all.append(parameters)
+
+    params = np.mean(params_all, axis=0)
+
+    return params
+
+
+
+def unpack_dataframe(df: pd.DataFrame):
+    t = np.array(df.get("time", 0))
+    v = np.array(df.get("voltage", 0))
+    c = np.array(df.get("current", 0))
+    return t, v, c
+
+
+def analyze_dataset(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    # unpack data into np.array
+    t, v, c = unpack_dataframe(df)
+
+    t_unique = np.unique(t)
+    sampling_freq = np.mean(1 / (t_unique[1:] - t_unique[:-1]))
 
     # filter voltages and currents to eliminate noise
     samples_num = 5
@@ -112,6 +209,8 @@ def analyze_dataset(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     c_f = np.sum(
         np.lib.stride_tricks.sliding_window_view(c, 2 * samples_num + 1), axis=1
     ) / (2 * samples_num + 1)
+
+    edges = detect_edges(c_f)
 
     # get ocv values by averaging over a 10 second period before each edge
     ocv_avg_time = 10
@@ -169,10 +268,10 @@ def model2c(num_values: int, col_width: int, *params: float) -> str:
     lut_soc_c_fmt: str = format_array_c(soc_table_name, lut_soc, col_width)
     lut_ocv_c_fmt: str = format_array_c(ocv_table_name, lut_ocv, col_width)
 
-    lookup_func_name = "ocv_lookup"
-    lookup_func = f"""
-/* performs linear interpolation on ocv vs soc curve values */
-static float {lookup_func_name}(float ocv) {{
+    soc_lookup_func_name = "soc_lookup"
+    soc_lookup_func = f"""
+\n\n/* performs linear interpolation on ocv vs soc curve values */
+static float {soc_lookup_func_name}(float ocv) {{
     if (ocv <= {ocv_table_name}[0]) return {soc_table_name}[0];
     if (ocv >= {ocv_table_name}[{define_name} - 1]) return {soc_table_name}[{define_name} - 1];
 
@@ -192,6 +291,30 @@ static float {lookup_func_name}(float ocv) {{
 }}
 """
 
+    ocv_lookup_func_name = "ocv_lookup"
+    ocv_lookup_func = f"""
+\n\n/* performs linear interpolation on ocv vs soc curve values */
+static float {ocv_lookup_func_name}(float soc) {{
+    if (soc <= {ocv_table_name}[0]) return {soc_table_name}[0];
+    if (soc >= {ocv_table_name}[{define_name} - 1]) return {soc_table_name}[{define_name} - 1];
+
+    for (int i = 0; i < {define_name} - 1; ++i) {{
+        if (soc >= {ocv_table_name}[i] && soc <= {ocv_table_name}[i + 1]) {{
+            float ocv_0 = {ocv_table_name}[i];
+            float ocv_1 = {ocv_table_name}[i + 1];
+            float soc_0 = {soc_table_name}[i];
+            float soc_1 = {soc_table_name}[i + 1];
+            float t = (soc - soc_0) / (soc_1 - soc_0);
+            return ocv_0 + t * (ocv_1 - ocv_0);
+        }}
+    }}
+
+    /* unreachable */
+    return 0.0f;
+}}
+"""
+
+
     file_body += header
     file_body += "#ifndef OCV_LUT_H\n"
     file_body += "#define OCV_LUT_H\n\n"
@@ -199,7 +322,8 @@ static float {lookup_func_name}(float ocv) {{
     file_body += lut_ocv_c_fmt
     file_body += "\n"
     file_body += lut_soc_c_fmt
-    file_body += lookup_func
+    file_body += soc_lookup_func
+    file_body += ocv_lookup_func
     file_body += "\n#endif /* OCV_LUT */\n"
 
     return file_body
@@ -222,21 +346,25 @@ def get_data_files() -> List[Any]:
     return glob.glob("data/**/*.csv", recursive=True)
 
 
-def fit(xdata: np.ndarray, ydata: np.ndarray, initial_guess: List[float]):
+def fit_ocv_model(xdata: np.ndarray, ydata: np.ndarray, initial_guess: List[float]):
     popt, pcov = curve_fit(ocv_model, xdata, ydata, p0=initial_guess, maxfev=20000)
     return popt, pcov
 
 
 def main():
+    dataframe_list = []
     data: List[dict[str, float | int]] = []
+    file_list = get_data_files()
 
-    for file in get_data_files():
+    for file in file_list:
         temp_match = re.search(r"(\d+)deg", file)
         temp = int(temp_match.group(1)) if temp_match else 25
         df = load_data(file)
+        dataframe_list.append(df)
         ocv_values, soc = analyze_dataset(df)
         for o, s in zip(ocv_values, soc):
             data.append({"soc": s, "ocv": o, "temp": temp})
+        break
 
     df_all = pd.DataFrame(data)
 
@@ -248,12 +376,11 @@ def main():
     ydata: np.ndarray = ocv_all
 
     initial_guess: list[float] = [3.5, 0.1, 0.00, -0.2, 400, 1, 0]
-    popt, _ = fit(xdata, ydata, initial_guess)
+    soc_ocv_parameters, _ = fit_ocv_model(xdata, ydata, initial_guess)
 
     # Initial guess for the parameters [a, b, c, d, e, f, alpha]
-
     # Extract fitted parameters
-    a, b, c, d, e, f, alpha = popt
+    a, b, c, d, e, f, alpha = soc_ocv_parameters
     print("Fitted parameters:")
     print(f"a = {a}")
     print(f"b = {b}")
@@ -263,10 +390,27 @@ def main():
     print(f"f = {f}")
     print(f"alpha = {alpha}")
 
-    fig = plot_soc_ocv(soc_all, ocv_all, a, b, c, d, e, f, alpha)
+    fig, ax = plot_soc_ocv(
+        soc_all,
+        ocv_all,
+        "Voltage readings",
+        "SoC (%)",
+        "OCV (V)",
+        *soc_ocv_parameters,
+    )
     plt.show()
 
-    output_file_text = model2c(1000, 10, *popt)
+    battery_parameters = battery_parameter_estimation(dataframe_list[0])
+    r0, r1, r2, c1, c2 = battery_parameters
+
+    output_file_text = model2c(1000, 10, *soc_ocv_parameters)
+
+    output_file_text += f"""
+\n\n/*
+* Estimated battery parameters
+* R0 = {r0:.6f}, R1 = {r1:.6f}, R2 = {r2:.6f}, C1 = {c1:.6f}, C2 = {c2:.6f}
+*/
+    """
 
     with open("ocv_lut.h", "w") as f:
         f.write(output_file_text)

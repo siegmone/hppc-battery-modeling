@@ -174,7 +174,7 @@ ydata: np.ndarray = ocv_values
 # fit
 initial_guess: list[float] = [3.5, 0.1, 0.00, -0.2, 400, 1, 0]
 popt = initial_guess
-popt, _ = analysis.fit(xdata, ydata, initial_guess)
+popt, _ = analysis.fit_ocv_model(xdata, ydata, initial_guess)
 a, b, c, d, e, f, alpha = popt
 
 # display parameters
