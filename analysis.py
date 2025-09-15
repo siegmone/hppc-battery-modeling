@@ -266,7 +266,7 @@ def model2c(num_values: int, col_width: int, *params: float) -> str:
 
     soc_lookup_func_name = "soc_lookup"
     soc_lookup_func = f"""
-\n\n/* performs linear interpolation on ocv vs soc curve values */
+\n/* performs linear interpolation on ocv vs soc curve values */
 static float {soc_lookup_func_name}(float ocv) {{
     if (ocv <= {ocv_table_name}[0]) return {soc_table_name}[0];
     if (ocv >= {ocv_table_name}[{define_name} - 1]) return {soc_table_name}[{define_name} - 1];
@@ -289,13 +289,13 @@ static float {soc_lookup_func_name}(float ocv) {{
 
     ocv_lookup_func_name = "ocv_lookup"
     ocv_lookup_func = f"""
-\n\n/* performs linear interpolation on ocv vs soc curve values */
+\n/* performs linear interpolation on ocv vs soc curve values */
 static float {ocv_lookup_func_name}(float soc) {{
-    if (soc <= {ocv_table_name}[0]) return {soc_table_name}[0];
-    if (soc >= {ocv_table_name}[{define_name} - 1]) return {soc_table_name}[{define_name} - 1];
+    if (soc <= {soc_table_name}[0]) return {ocv_table_name}[0];
+    if (soc >= {soc_table_name}[{define_name} - 1]) return {ocv_table_name}[{define_name} - 1];
 
     for (int i = 0; i < {define_name} - 1; ++i) {{
-        if (soc >= {ocv_table_name}[i] && soc <= {ocv_table_name}[i + 1]) {{
+        if (soc >= {soc_table_name}[i] && soc <= {soc_table_name}[i + 1]) {{
             float ocv_0 = {ocv_table_name}[i];
             float ocv_1 = {ocv_table_name}[i + 1];
             float soc_0 = {soc_table_name}[i];
@@ -397,16 +397,19 @@ def main():
     plt.show()
 
     battery_parameters = battery_parameter_estimation(dataframe_list[0])
-    r0, r1, r2, c1, c2 = battery_parameters
+    r0, r1, r2, t1, t2 = battery_parameters
+    c1 = t1 / r1 if r1 != 0 else 0.0
+    c2 = t2 / r2 if r2 != 0 else 0.0
 
     output_file_text = model2c(1000, 10, *soc_ocv_parameters)
 
     output_file_text += f"""
-\n\n/*
+/*
 * Estimated battery parameters
 * R0 = {r0:.6f}, R1 = {r1:.6f}, R2 = {r2:.6f}, C1 = {c1:.6f}, C2 = {c2:.6f}
 */
-    """
+\n
+"""
 
     with open("ocv_lut.h", "w") as f:
         f.write(output_file_text)
